@@ -1,6 +1,8 @@
 port module Main exposing (main)
 
+import Generator
 import Parser exposing ((|.), (|=), Parser, Problem(..), Step(..), Trailing(..))
+import Types exposing (AggregateType(..), EnumType, EnumValue(..), Field(..), Model, NonEnumType(..), PrimitiveType(..), Type(..), UnionMember(..), UserType(..))
 
 
 port print : String -> Cmd msg
@@ -19,14 +21,7 @@ port writeFileDone : ({} -> msg) -> Sub msg
 
 
 type alias Flags =
-    { schema : String
-    , moduleName : String
-    , outputFile : String
-    }
-
-
-type alias Model =
-    Flags
+    Model
 
 
 type Msg
@@ -59,8 +54,7 @@ update msg model =
                 content =
                     case Parser.run mainParser model.schema of
                         Ok userTypes ->
-                            String.join "\n\n" <|
-                                List.map (userTypeToString 0) userTypes
+                            Generator.generate model userTypes
 
                         Err deadEnds ->
                             String.join "\n" <|
@@ -128,140 +122,6 @@ problemToString problem =
 
         BadRepeat ->
             "branch 'BadRepeat' not implemented"
-
-
-userTypeToString : Int -> UserType -> String
-userTypeToString i ut =
-    case ut of
-        Type name value ->
-            "type " ++ name ++ " " ++ nonEnumTypeToString i value
-
-        Enum name options ->
-            "enum "
-                ++ name
-                ++ " "
-                ++ enumTypeToString options
-
-
-enumTypeToString : EnumType -> String
-enumTypeToString et =
-    "{\n"
-        ++ String.join "\n" (List.map optionToString et)
-        ++ "\n}"
-
-
-nonEnumTypeToString : Int -> NonEnumType -> String
-nonEnumTypeToString i net =
-    case net of
-        PrimitiveType p ->
-            primitiveTypeToString p
-
-        AggregateType a ->
-            aggregateTypeToString i a
-
-        UserTypeName n ->
-            n
-
-
-aggregateTypeToString : Int -> AggregateType -> String
-aggregateTypeToString i at =
-    case at of
-        OptionalType t ->
-            "optional<" ++ typeToString i t ++ ">"
-
-        ArrayType Nothing t ->
-            "[]" ++ typeToString i t
-
-        ArrayType (Just l) t ->
-            "[" ++ String.fromInt l ++ "]" ++ typeToString i t
-
-        MapType f t ->
-            "map[" ++ typeToString i f ++ "]" ++ typeToString i t
-
-        UnionType members ->
-            "("
-                ++ String.join " | " (List.map (unionMemberToString i) members)
-                ++ ")"
-
-        StructType fields ->
-            "{\n"
-                ++ String.concat (List.map (\f -> indent (i + 1) ++ fieldToString (i + 1) f ++ "\n") fields)
-                ++ indent i
-                ++ "}"
-
-
-unionMemberToString : Int -> UnionMember -> String
-unionMemberToString i (UnionMember t k) =
-    case k of
-        Nothing ->
-            typeToString i t
-
-        Just l ->
-            typeToString i t ++ " = " ++ String.fromInt l
-
-
-fieldToString : Int -> Field -> String
-fieldToString i (Field name value) =
-    name ++ " : " ++ typeToString i value
-
-
-indent : Int -> String
-indent n =
-    String.repeat n "    "
-
-
-typeToString : Int -> Type -> String
-typeToString i t =
-    case t of
-        NonEnumType net ->
-            nonEnumTypeToString i net
-
-        EnumType et ->
-            enumTypeToString et
-
-
-primitiveTypeToString : PrimitiveType -> String
-primitiveTypeToString p =
-    case p of
-        Int ->
-            "int"
-
-        I s ->
-            "i" ++ String.fromInt s
-
-        UInt ->
-            "uint"
-
-        U s ->
-            "u" ++ String.fromInt s
-
-        Float s ->
-            "f" ++ String.fromInt s
-
-        Bool ->
-            "bool"
-
-        String ->
-            "string"
-
-        Data Nothing ->
-            "data"
-
-        Data (Just l) ->
-            "data<" ++ String.fromInt l ++ ">"
-
-        Void ->
-            "void"
-
-
-optionToString : EnumValue -> String
-optionToString (EnumValue name value) =
-    case value of
-        Nothing ->
-            "    " ++ name
-
-        Just v ->
-            "    " ++ name ++ " = " ++ String.fromInt v
 
 
 mainParser : Parser (List UserType)
@@ -503,58 +363,6 @@ whitespace =
                 |= Parser.getOffset
     in
     Parser.loop () step
-
-
-type UserType
-    = Type String NonEnumType
-    | Enum String EnumType
-
-
-type NonEnumType
-    = PrimitiveType PrimitiveType
-    | AggregateType AggregateType
-    | UserTypeName String
-
-
-type PrimitiveType
-    = Int
-    | I Int
-    | UInt
-    | U Int
-    | Float Int
-    | Bool
-    | String
-    | Data (Maybe Int)
-    | Void
-
-
-type AggregateType
-    = OptionalType Type
-    | ArrayType (Maybe Int) Type
-    | MapType Type Type
-    | UnionType (List UnionMember)
-    | StructType (List Field)
-
-
-type Type
-    = NonEnumType NonEnumType
-    | EnumType EnumType
-
-
-type alias EnumType =
-    List EnumValue
-
-
-type EnumValue
-    = EnumValue String (Maybe Int)
-
-
-type UnionMember
-    = UnionMember Type (Maybe Int)
-
-
-type Field
-    = Field String Type
 
 
 init : Flags -> ( Model, Cmd Msg )
