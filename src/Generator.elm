@@ -9,7 +9,7 @@ import Types exposing (AggregateType(..), EnumType, EnumValue(..), Field(..), Mo
 generate : Model -> List UserType -> String
 generate model userTypes =
     file model userTypes
-        |> Elm.Pretty.pretty 120
+        |> Elm.Pretty.pretty 83
 
 
 file : Model -> List UserType -> File
@@ -47,18 +47,28 @@ toDeclarations : UserType -> List Declaration
 toDeclarations userType =
     let
         comment =
-            Just (Gen.emptyDocComment |> Gen.markdown "TEST")
+            Gen.emptyDocComment
+                |> Gen.markdown ("Codec for the `" ++ typeName ++ "` type.")
+                |> Just
 
         typeAnnotation =
-            Just (Gen.typed "Codec" [ Gen.typed (getUserTypeName userType) [] ])
+            Just (Gen.typed "Codec" [ Gen.typed typeName [] ])
+
+        typeName =
+            getUserTypeName userType
     in
     [ toTypeDeclaration userType
-    , Gen.funDecl comment typeAnnotation (toCodecName userType) [] (toCodec userType)
+    , Gen.funDecl comment typeAnnotation (toCodecName userType) [] (toCodecUserType userType)
     ]
 
 
-toCodec : UserType -> Expression
-toCodec userType =
+codec : String -> Expression
+codec =
+    Gen.fqVal [ "Codec" ]
+
+
+toCodecUserType : UserType -> Expression
+toCodecUserType userType =
     case userType of
         Type name (AggregateType (UnionType members)) ->
             toCodecUnion name members
@@ -89,22 +99,18 @@ codecNameNonEnumType net =
         AggregateType at ->
             codecNameAggregateType at
 
-        UserTypeName _ ->
-            todoExpression "branch 'UserTypeName _' not implemented"
+        UserTypeName name ->
+            Gen.val <| String.decapitalize name ++ "Codec"
 
 
 codecNameAggregateType : AggregateType -> Expression
 codecNameAggregateType at =
-    let
-        codec =
-            Gen.fqVal [ "Codec" ]
-    in
     case at of
         OptionalType ot ->
-            Gen.apply [ codec "maybe", codecNameType ot ]
+            Gen.apply [ codec "optional", Gen.parens <| codecNameType ot ]
 
-        ArrayType _ _ ->
-            todoExpression "branch 'ArrayType _ _' not implemented"
+        ArrayType size ct ->
+            arrayCodec size ct
 
         MapType _ _ ->
             todoExpression "branch 'MapType _ _' not implemented"
@@ -112,8 +118,55 @@ codecNameAggregateType at =
         UnionType _ ->
             todoExpression "branch 'UnionType _' not implemented"
 
-        StructType _ ->
-            todoExpression "branch 'StructType _' not implemented"
+        StructType fields ->
+            structCodec fields
+
+
+arrayCodec : Maybe Int -> Type -> Expression
+arrayCodec size at =
+    case size of
+        Nothing ->
+            Gen.apply
+                [ codec "array"
+                , Gen.parens <| codecNameType at
+                ]
+
+        Just s ->
+            Gen.apply
+                [ codec "arrayWithLength"
+                , Gen.int s
+                , Gen.parens <| codecNameType at
+                ]
+
+
+structCodec : List Field -> Expression
+structCodec fields =
+    let
+        toPattern (Field name _) =
+            Gen.varPattern name
+
+        patterns =
+            List.map toPattern fields
+
+        toAssignment (Field name _) =
+            ( name, Gen.val name )
+
+        ctor =
+            Gen.record (List.map toAssignment fields)
+
+        ctorLambda =
+            Gen.parens (Gen.lambda patterns ctor)
+
+        step (Field name type_) =
+            Gen.apply
+                [ codec "field"
+                , Gen.accessFun <| "." ++ name
+                , Gen.parens <| codecNameType type_
+                ]
+    in
+    Gen.pipe
+        (Gen.apply [ codec "struct", ctorLambda ])
+        (List.map step fields ++ [ codec "buildStruct" ])
 
 
 codecNameType : Type -> Expression
@@ -128,19 +181,21 @@ codecNameType t =
 
 codecNamePrimitiveType : PrimitiveType -> Expression
 codecNamePrimitiveType pt =
-    let
-        codec =
-            Gen.fqVal [ "Codec" ]
-    in
     case pt of
         Int ->
             codec "int"
 
-        I _ ->
-            todoExpression "branch 'I _' not implemented"
+        I 64 ->
+            todoExpression "i64 Codec is not supported yet"
+
+        I s ->
+            codec ("i" ++ String.fromInt s)
 
         UInt ->
             codec "uint"
+
+        U 64 ->
+            todoExpression "u64 Codec is not supported yet"
 
         U _ ->
             todoExpression "branch 'U _' not implemented"
@@ -149,7 +204,7 @@ codecNamePrimitiveType pt =
             todoExpression "branch 'Float _' not implemented"
 
         Bool ->
-            todoExpression "branch 'Bool' not implemented"
+            codec "bool"
 
         String ->
             codec "string"
@@ -215,7 +270,7 @@ aggregateTypeToAnnotation atype =
             Gen.maybeAnn (typeToAnnotation t)
 
         ArrayType _ t ->
-            Gen.listAnn (typeToAnnotation t)
+            Gen.typed "Array" [ typeToAnnotation t ]
 
         MapType f t ->
             Gen.dictAnn (typeToAnnotation f) (typeToAnnotation t)
@@ -313,6 +368,9 @@ imports =
     , Gen.importStmt [ "Dict" ]
         Nothing
         (Just (Gen.exposeExplicit [ Gen.closedTypeExpose "Dict" ]))
+    , Gen.importStmt [ "Array" ]
+        Nothing
+        (Just (Gen.exposeExplicit [ Gen.closedTypeExpose "Array" ]))
     ]
 
 
