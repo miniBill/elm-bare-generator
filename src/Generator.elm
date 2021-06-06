@@ -101,8 +101,72 @@ toCodecEnum values =
 
 
 toCodecUnion : String -> List UnionMember -> Expression
-toCodecUnion arg1 arg2 =
-    todoExpression "toCodecUnion"
+toCodecUnion name members =
+    let
+        toNameAndCodecs ((UnionMember variantType _) as um) =
+            ( unionMemberToName name um
+            , case variantType of
+                NonEnumType (PrimitiveType Void) ->
+                    []
+
+                _ ->
+                    [ codecNameType variantType ]
+            )
+
+        match =
+            let
+                branches =
+                    List.map
+                        (\um ->
+                            let
+                                ( variantName, codecs ) =
+                                    toNameAndCodecs um
+
+                                fname =
+                                    "f" ++ String.decapitalize (String.dropLeft (String.length name) variantName)
+                            in
+                            ( Gen.varPattern fname
+                            , ( Gen.namedPattern variantName
+                                    (List.indexedMap (\i _ -> Gen.varPattern <| "v" ++ String.fromInt i) codecs)
+                              , Gen.apply <| Gen.fun fname :: List.indexedMap (\i _ -> Gen.val <| "v" ++ String.fromInt i) codecs
+                              )
+                            )
+                        )
+                        members
+
+                case_ =
+                    Gen.caseExpr (Gen.val "value")
+                        (List.map Tuple.second branches)
+            in
+            Gen.lambda (List.map Tuple.first branches ++ [ Gen.varPattern "value" ]) case_
+
+        toCouple ((UnionMember _ variantValue) as um) ( i, acc ) =
+            let
+                j =
+                    Maybe.withDefault i variantValue
+
+                ( variantName, codecs ) =
+                    toNameAndCodecs um
+            in
+            ( j + 1
+            , Gen.apply
+                ([ codec <| "variant" ++ String.fromInt (List.length codecs)
+                 , Gen.int j
+                 , Gen.val variantName
+                 ]
+                    ++ codecs
+                )
+                :: acc
+            )
+
+        pipe =
+            List.foldl toCouple ( 0, [] ) members
+                |> Tuple.second
+                |> List.reverse
+    in
+    Gen.pipe
+        (Gen.apply [ codec "taggedUnion", match ])
+        (pipe ++ [ codec "buildTaggedUnion" ])
 
 
 codecNameNonEnumType : NonEnumType -> Expression
@@ -127,8 +191,8 @@ codecNameAggregateType at =
         ArrayType size ct ->
             arrayCodec size ct
 
-        MapType _ _ ->
-            todoExpression "branch 'MapType _ _' not implemented"
+        MapType f t ->
+            Gen.apply [ codec "dict", Gen.parens <| codecNameType f, Gen.parens <| codecNameType t ]
 
         UnionType _ ->
             todoExpression "branch 'UnionType _' not implemented"
@@ -367,15 +431,39 @@ enumVariantNameToElm variantName =
 toDeclarationUnion : String -> List UnionMember -> Declaration
 toDeclarationUnion name defs =
     let
-        toVariant (UnionMember t _) =
-            case t of
-                NonEnumType (UserTypeName n) ->
-                    ( name ++ n, [ Gen.typed n [] ] )
+        toVariant ((UnionMember t _) as um) =
+            ( unionMemberToName name um
+            , case t of
+                NonEnumType (PrimitiveType Void) ->
+                    []
 
                 _ ->
-                    Debug.todo "branch '!_!' not implemented"
+                    [ typeToAnnotation t ]
+            )
     in
     Gen.customTypeDecl Nothing name [] (List.map toVariant defs)
+
+
+unionMemberToName : String -> UnionMember -> String
+unionMemberToName unionName (UnionMember t _) =
+    let
+        primitiveTypeToName p =
+            primitiveTypeToString p
+                |> String.replace ">" ""
+                |> String.replace "<" ""
+                |> String.toTitleCase
+    in
+    unionName
+        ++ (case t of
+                NonEnumType (UserTypeName n) ->
+                    n
+
+                NonEnumType (PrimitiveType p) ->
+                    primitiveTypeToName p
+
+                _ ->
+                    "\"TODO " ++ Debug.toString t ++ "\""
+           )
 
 
 imports : List Import

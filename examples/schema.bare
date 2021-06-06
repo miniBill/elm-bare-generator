@@ -48,3 +48,5 @@ type Address {
     state: string
     country: string
 }
+
+type UnionWithPrimitive (int | void)
