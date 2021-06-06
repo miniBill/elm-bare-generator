@@ -1,6 +1,12 @@
 type PublicKey data<128>
 type Time string # ISO 8601
 
+enum Sequential {
+    RED
+    GREEN
+    BLUE
+}
+
 enum Department {
     ACCOUNTING
     ADMINISTRATION
