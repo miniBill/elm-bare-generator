@@ -76,13 +76,28 @@ toCodecUserType userType =
         Type name def ->
             codecNameNonEnumType def
 
-        Enum name defs ->
-            toCodecEnum name defs
+        Enum _ defs ->
+            toCodecEnum defs
 
 
-toCodecEnum : String -> EnumType -> Expression
-toCodecEnum arg1 arg2 =
-    todoExpression "toCodecEnum"
+toCodecEnum : EnumType -> Expression
+toCodecEnum values =
+    let
+        isSequential =
+            List.all (\(EnumValue _ e) -> e == Nothing) values
+
+        toCouple (EnumValue variantName variantValue) ( i, acc ) =
+            let
+                j =
+                    Maybe.withDefault i variantValue
+            in
+            ( j + 1, Gen.tuple [ Gen.val (enumVariantNameToElm variantName), Gen.int j ] :: acc )
+    in
+    if isSequential then
+        Gen.apply [ codec "enum", Gen.list <| List.map (\(EnumValue variantName _) -> Gen.val <| enumVariantNameToElm variantName) values ]
+
+    else
+        Gen.apply [ codec "enumWithValues", Gen.list <| List.reverse <| Tuple.second <| List.foldl toCouple ( 0, [] ) values ]
 
 
 toCodecUnion : String -> List UnionMember -> Expression
@@ -336,14 +351,17 @@ toDeclarationEnum : String -> EnumType -> Declaration
 toDeclarationEnum name defs =
     let
         toVariant (EnumValue variantName _) =
-            ( variantName
-                |> String.split "_"
-                |> List.map (String.toLower >> String.toTitleCase)
-                |> String.concat
-            , []
-            )
+            ( enumVariantNameToElm variantName, [] )
     in
     Gen.customTypeDecl Nothing name [] (List.map toVariant defs)
+
+
+enumVariantNameToElm : String -> String
+enumVariantNameToElm variantName =
+    variantName
+        |> String.split "_"
+        |> List.map (String.toLower >> String.toTitleCase)
+        |> String.concat
 
 
 toDeclarationUnion : String -> List UnionMember -> Declaration
